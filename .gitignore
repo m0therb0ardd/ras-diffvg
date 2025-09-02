@@ -1,10 +1,59 @@
-build
-apps/results
-apps/files
-apps/__pycache__
-compile_commands.json
-.vimrc
-diffvg.egg-info
-dist
-__pycache__
+# build
+# apps/results
+# apps/files
+# apps/__pycache__
+# compile_commands.json
+# .vimrc
+# diffvg.egg-info
+# dist
+# __pycache__
+# .DS_Store
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+.python-version
+.venv/
+.env
+
+# --- OS cruft ---
 .DS_Store
+.vscode/
+.idea/
+
+# --- DiffVG outputs ---
+out/
+apps/results/
+apps/files/
+apps/__pycache__/
+apps/*.png
+apps/*.jpg
+apps/*.jpeg
+apps/*.gif
+apps/*.svg
+apps/*.pdf
+apps/*.mp4
+apps/*.ppm
+
+# --- CUDA installers and binaries ---
+*.deb
+*.run
+
+# --- CMake build artifacts ---
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+compile_commands.json
+Makefile
+*.o
+*.so
+*.a
+*.dll
+*.dylib
+*.exe
