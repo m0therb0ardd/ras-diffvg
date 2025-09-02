@@ -1,3 +1,8 @@
 mnist
 data/sketchrnn_cat.npz
 data
+.python-version
+*.deb
+*.run
+*.png
+out/
