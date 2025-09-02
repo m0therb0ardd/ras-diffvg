@@ -20,10 +20,12 @@ import os
 import sys
 import json
 import numpy as np
+import json
 
 pydiffvg.set_print_timing(True)
 
 gamma = 1.0
+
 
 def main(args):
     dir_name = datetime.now().strftime("%Y%m%d_%H%M%S-") + args.target.split('/')[-1].split('.')[0]
@@ -77,14 +79,190 @@ def main(args):
         v = min(max(v, 0.0), 1.0 - 1e-6)
         return (u, v)
 
+    # Modify the sample_uv_from_color function for detail strokes
+    def sample_uv_for_detail():
+        """Sample from areas with high frequency content (edges, details)"""
+        # Compute image gradients to find edges
+        with torch.no_grad():
+            grad_x = torch.abs(torch.nn.functional.conv2d(
+                target.mean(dim=1, keepdim=True), 
+                torch.tensor([[[[-1, 0, 1]]]], dtype=torch.float32, device=target.device),
+                padding=1
+            ))
+            grad_y = torch.abs(torch.nn.functional.conv2d(
+                target.mean(dim=1, keepdim=True),
+                torch.tensor([[[[-1], [0], [1]]]], dtype=torch.float32, device=target.device),
+                padding=1
+            ))
+            edge_strength = (grad_x + grad_y).squeeze()
+        
+        # Sample from high-edge areas
+        if edge_strength.max() > 0:
+            probs = edge_strength / edge_strength.sum()
+            flat_idx = torch.multinomial(probs.view(-1), 1).item()
+            y = flat_idx // canvas_width
+            x = flat_idx % canvas_width
+        else:
+            # Fallback to color-based sampling
+            return sample_uv_from_color()
+        
+        # Jitter and normalize
+        u = (float(x) + random.random()) / float(canvas_width)
+        v = (float(y) + random.random()) / float(canvas_height)
+        return (u, v)
 
     shapes = []
     shape_groups = []
 
+    # === Preload & freeze strokes from JSON  ===
+    frozen_idx = set()
+    new_indices = []
+    whitespace_indices = []
+    preloaded_count = 0  # Track how many strokes we load from JSON
 
+    # if args.init_json is not None:
+    #     with open(args.init_json, "r") as f:
+    #         data = json.load(f)
+
+    #     def ensure_rgba(c, force_opaque_alpha):
+    #         c = list(c)
+    #         if len(c) == 3:
+    #             c = c + [1.0 if force_opaque_alpha else random.random()]
+    #         if force_opaque_alpha:
+    #             c[3] = 1.0
+    #         return c
+
+    #     for _i, s in enumerate(data.get("strokes", [])):
+    #         pts = torch.tensor(s["points"], dtype=torch.float32, device=pydiffvg.get_device())
+    #         # pts = torch.tensor(s["points"], dtype=torch.float32, device=pydiffvg.get_device()
+
+    #         n = pts.shape[0]
+    #         if n >= 4:
+    #             segs = max((n - 1) // 3, 1)  # heuristic chunking for cubic
+    #             num_control_points = torch.zeros(segs, dtype=torch.int32, device=pydiffvg.get_device()) + 2
+    #         else:
+    #             segs = 1
+    #             num_control_points = torch.zeros(segs, dtype=torch.int32, device=pydiffvg.get_device()) + 0
+
+    #         stroke_w = torch.tensor(float(s.get("stroke_width", 1.0)),
+    #                                 dtype=torch.float32, device=pydiffvg.get_device())
+    #         stroke_col = torch.tensor(
+    #             ensure_rgba(s.get("color", [0,0,0,1]), args.ignore_alpha),
+    #             dtype=torch.float32, device=pydiffvg.get_device()
+    #         )
+
+    #         path = pydiffvg.Path(num_control_points=num_control_points,
+    #                             points=pts,
+    #                             stroke_width=stroke_w,
+    #                             is_closed=False)
+    #         shapes.append(path)
+
+    #         grp = pydiffvg.ShapeGroup(
+    #             shape_ids=torch.tensor([len(shapes) - 1], device=pydiffvg.get_device()),
+    #             fill_color=None,
+    #             stroke_color=stroke_col
+    #         )
+    #         shape_groups.append(grp)
+
+    #         # Mark this stroke as frozen
+    #         frozen_idx.add(len(shapes) - 1)
+    #         preloaded_count += 1  # Increment counter
+
+    #     print(f"Loaded {preloaded_count} frozen strokes from {args.init_json}")
+
+    if args.init_json is not None:
+        with open(args.init_json, "r") as f:
+            data = json.load(f)
+
+        def ensure_rgba(c, force_opaque_alpha):
+            c = list(c)
+            if len(c) == 3:
+                c.append(1.0 if force_opaque_alpha else random.random())
+            if force_opaque_alpha:
+                c[3] = 1.0
+            return c
+
+        # Optional canvas metadata from JSON (best practice to save these)
+        src_w = data.get("canvas_width", None)
+        src_h = data.get("canvas_height", None)
+
+        device = pydiffvg.get_device()
+        preloaded_count = 0
+
+        for _i, s in enumerate(data.get("strokes", [])):
+            pts = torch.tensor(s["points"], dtype=torch.float32, device=device)
+
+            # --- Decide scaling for points and width ---
+            looks_normalized = (pts.numel() > 0 and pts.max().item() <= 1.01 and pts.min().item() >= 0.0)
+            if isinstance(src_w, (int, float)) and isinstance(src_h, (int, float)):
+                sx = float(canvas_width) / float(src_w)
+                sy = float(canvas_height) / float(src_h)
+            elif looks_normalized:
+                sx = float(canvas_width)
+                sy = float(canvas_height)
+            else:
+                sx = sy = 1.0  # assume already in pixel coords
+
+            # scale points
+            if sx != 1.0 or sy != 1.0:
+                pts[:, 0] *= sx
+                pts[:, 1] *= sy
+
+            # base width from JSON
+            stroke_w = torch.tensor(float(s.get("stroke_width", 1.0)), dtype=torch.float32, device=device)
+
+            # scale width with average axis scale
+            scale_w = 0.5 * (sx + sy)
+            if scale_w != 1.0:
+                stroke_w = stroke_w * float(scale_w)
+
+            stroke_col = torch.tensor(
+                ensure_rgba(s.get("color", [0, 0, 0, 1]), args.ignore_alpha),
+                dtype=torch.float32, device=device
+            )
+
+            # --- Build Path as polyline if JSON lacks true control-point structure ---
+            if "num_control_points" in s:
+                # Exact reconstruction (if you exported control points previously)
+                ncp = torch.tensor(s["num_control_points"], dtype=torch.int32, device=device)
+            else:
+                # Treat as polyline: one straight segment between each consecutive pair
+                npts = pts.shape[0]
+                nseg = max(1, npts - 1)
+                ncp = torch.zeros(nseg, dtype=torch.int32, device=device)  # all segments are straight
+
+            path = pydiffvg.Path(
+                num_control_points=ncp,
+                points=pts,
+                stroke_width=stroke_w,
+                is_closed=bool(s.get("is_closed", False))
+            )
+            shapes.append(path)
+
+            grp = pydiffvg.ShapeGroup(
+                shape_ids=torch.tensor([len(shapes) - 1], dtype=torch.int32),  # CPU int32 is fine
+                fill_color=None,
+                stroke_color=stroke_col
+            )
+            shape_groups.append(grp)
+
+            # Freeze underlayer
+            frozen_idx.add(len(shapes) - 1)
+            preloaded_count += 1
+
+            # Optional: quick debug print for first few strokes
+            if _i < 3:
+                xmin, ymin = float(pts[:,0].min()), float(pts[:,1].min())
+                xmax, ymax = float(pts[:,0].max()), float(pts[:,1].max())
+                print(f"[init_json] stroke {_i} bbox=({xmin:.1f},{ymin:.1f})-({xmax:.1f},{ymax:.1f}) "
+                    f"w={float(stroke_w):.2f} scaled(sx,sy)=({sx:.3f},{sy:.3f})")
+
+        print(f"Loaded {preloaded_count} frozen strokes from {args.init_json}")
 
     if args.use_blob:
-        for i in range(num_paths):
+        # Decide how many *new* strokes to add (on top of any init_json strokes)
+        new_paths = args.extra_paths if args.extra_paths is not None else args.num_paths
+        for i in range(new_paths):
             num_segments = random.randint(3, 5)
             num_control_points = torch.zeros(num_segments, dtype = torch.int32) + 2
             points = []
@@ -117,7 +295,11 @@ def main(args):
                                                                         random.random()]))
             shape_groups.append(path_group)
     else:
-        for i in range(num_paths):
+        # Decide how many *new* strokes to add (on top of any init_json strokes)
+        new_paths = args.extra_paths if args.extra_paths is not None else args.num_paths
+        # for i in range(num_paths):
+        for i in range(new_paths):
+
             num_segments = random.randint(1, 3)
             num_control_points = torch.zeros(num_segments, dtype = torch.int32) + 2
             points = []
@@ -171,24 +353,55 @@ def main(args):
                  *scene_args)
     pydiffvg.imwrite(img.cpu(), f'results/{dir_name}/init.png', gamma=gamma)
 
-    points_vars = []
-    stroke_width_vars = []
-    color_vars = []
-    for path in shapes:
-        path.points.requires_grad = True
-        points_vars.append(path.points)
+    # points_vars = []
+    # stroke_width_vars = []
+    # color_vars = []
+    # for path in shapes:
+    #     path.points.requires_grad = True
+    #     points_vars.append(path.points)
+    # if not args.use_blob:
+    #     for path in shapes:
+    #         path.stroke_width.requires_grad = True
+    #         stroke_width_vars.append(path.stroke_width)
+    # if args.use_blob:
+    #     for group in shape_groups:
+    #         group.fill_color.requires_grad = True
+    #         color_vars.append(group.fill_color)
+    # else:
+    #     for group in shape_groups:
+    #         group.stroke_color.requires_grad = True
+    #         color_vars.append(group.stroke_color)
+
+    points_vars, stroke_width_vars, color_vars = [], [], []
+
+    for i, path in enumerate(shapes):
+        is_frozen = i in frozen_idx
+        path.points.requires_grad = not is_frozen
+        if not is_frozen:
+            points_vars.append(path.points)
+
     if not args.use_blob:
-        for path in shapes:
-            path.stroke_width.requires_grad = True
-            stroke_width_vars.append(path.stroke_width)
+        for i, path in enumerate(shapes):
+            is_frozen = i in frozen_idx
+            path.stroke_width.requires_grad = not is_frozen
+            if not is_frozen:
+                stroke_width_vars.append(path.stroke_width)
+
     if args.use_blob:
-        for group in shape_groups:
-            group.fill_color.requires_grad = True
-            color_vars.append(group.fill_color)
+        for i, group in enumerate(shape_groups):
+            is_frozen = i in frozen_idx
+            if group.fill_color is not None:
+                group.fill_color.requires_grad = not is_frozen
+                if not is_frozen:
+                    color_vars.append(group.fill_color)
     else:
-        for group in shape_groups:
-            group.stroke_color.requires_grad = True
-            color_vars.append(group.stroke_color)
+        for i, group in enumerate(shape_groups):
+            is_frozen = i in frozen_idx
+            if group.stroke_color is not None:
+                group.stroke_color.requires_grad = not is_frozen
+                if not is_frozen:
+                    color_vars.append(group.stroke_color)
+
     
     # Optimize
     points_optim = torch.optim.Adam(points_vars, lr=1.0)
@@ -268,8 +481,7 @@ def main(args):
         img = img.permute(0, 3, 1, 2) # NHWC -> NCHW
         # if args.use_lpips_loss:
         #     loss = perception_loss(img, target) + (img.mean() - target.mean()).pow(2)
-        # else:
-        #     loss = (img - target).pow(2).mean()
+        # else:new_indices.append(len(shapes) - 1)
         # print('render loss:', loss.item())
 
         # === Reconstruction loss (unchanged) ===
@@ -297,9 +509,16 @@ def main(args):
         if len(stroke_width_vars) > 0:
             width_optim.step()
         color_optim.step()
+        # if len(stroke_width_vars) > 0:
+        #     for path in shapes:
+        #         path.stroke_width.data.clamp_(1.0, max_width)
         if len(stroke_width_vars) > 0:
-            for path in shapes:
+            for i, path in enumerate(shapes):
+                if i in frozen_idx:
+                    continue  # keep underlayer exactly as-is
                 path.stroke_width.data.clamp_(1.0, max_width)
+
+
         if args.use_blob:
             for group in shape_groups:
                 group.fill_color.data.clamp_(0.0, 1.0)
@@ -435,8 +654,14 @@ def main(args):
                 #     pth.stroke_width.data.clamp_(1.0, max_width)
 
                 # keep widths in bounds
-                for pth in shapes:
+                # for pth in shapes:
+                #     pth.stroke_width.data.clamp_(1.0, max_width)
+                # keep widths in bounds (but don't touch frozen underlayer)
+                for i, pth in enumerate(shapes):
+                    if i in frozen_idx:
+                        continue
                     pth.stroke_width.data.clamp_(1.0, max_width)
+
 
                 # NEW: clamp colors into [0,1]; force alpha=1 if ignore_alpha
                 for grp in shape_groups:
@@ -557,6 +782,14 @@ if __name__ == "__main__":
     help="Initialize stroke start points only on non-black pixels of the target")
     parser.add_argument("--black_thresh", type=float, default=0.05,
         help="Brightness threshold (0..1). Pixels <= this are treated as black for initialization")
+    parser.add_argument("--init_json", type=str, default=None,
+        help="Path to a JSON of existing strokes to start from (frozen underlayer).")
+    parser.add_argument("--extra_paths", type=int, default=None,
+        help="How many NEW strokes to add on top of the frozen init_json strokes. Defaults to --num_paths if unset.")
+
+
+    parser.add_argument("--init_fg", action="store_true",
+        help="Use GrabCut (or brightness fallback) and constrain ALL new stroke points to the foreground.")
 
 
     args = parser.parse_args()
