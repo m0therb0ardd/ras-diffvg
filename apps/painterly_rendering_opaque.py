@@ -1,31 +1,18 @@
-"""
-Scream: python painterly_rendering.py imgs/scream.jpg --num_paths 2048 --max_width 4.0
-Fallingwater: python painterly_rendering.py imgs/fallingwater.jpg --num_paths 2048 --max_width 4.0
-Fallingwater: python painterly_rendering.py imgs/fallingwater.jpg --num_paths 2048 --max_width 4.0 --use_lpips_loss
-Baboon: python painterly_rendering.py imgs/baboon.png --num_paths 1024 --max_width 4.0 --num_iter 250
-Baboon Lpips: python painterly_rendering.py imgs/baboon.png --num_paths 1024 --max_width 4.0 --num_iter 500 --use_lpips_loss
-Kitty: python painterly_rendering.py imgs/kitty.jpg --num_paths 1024 --use_blob
-"""
 import pydiffvg
 import torch
-import skimage
 import skimage.io
 import random
 import ttools.modules
 import argparse
-
 from datetime import datetime
 import pickle
 import os
 import sys
-import json
 import numpy as np
 import json
 
 pydiffvg.set_print_timing(True)
-
 gamma = 1.0
-
 
 def main(args):
     dir_name = datetime.now().strftime("%Y%m%d_%H%M%S-") + args.target.split('/')[-1].split('.')[0]
@@ -48,13 +35,10 @@ def main(args):
     # Ensure target has only 3 channels (RGB) to match the rendered image
     if target.shape[1] == 4:  # If RGBA
         target = target[:, :3, :, :]  # Remove alpha channel
-    #target = torch.nn.functional.interpolate(target, size = [256, 256], mode = 'area')
     canvas_width, canvas_height = target.shape[3], target.shape[2]
-    num_paths = args.num_paths
     max_width = args.max_width
     random.seed(1234)
     torch.manual_seed(1234)
-
 
     # === Color-only init mask ===
     tgt_rgb = target[0, :3]                          # 3 x H x W
@@ -78,97 +62,12 @@ def main(args):
         u = min(max(u, 0.0), 1.0 - 1e-6)
         v = min(max(v, 0.0), 1.0 - 1e-6)
         return (u, v)
-
-    # Modify the sample_uv_from_color function for detail strokes
-    def sample_uv_for_detail():
-        """Sample from areas with high frequency content (edges, details)"""
-        # Compute image gradients to find edges
-        with torch.no_grad():
-            grad_x = torch.abs(torch.nn.functional.conv2d(
-                target.mean(dim=1, keepdim=True), 
-                torch.tensor([[[[-1, 0, 1]]]], dtype=torch.float32, device=target.device),
-                padding=1
-            ))
-            grad_y = torch.abs(torch.nn.functional.conv2d(
-                target.mean(dim=1, keepdim=True),
-                torch.tensor([[[[-1], [0], [1]]]], dtype=torch.float32, device=target.device),
-                padding=1
-            ))
-            edge_strength = (grad_x + grad_y).squeeze()
-        
-        # Sample from high-edge areas
-        if edge_strength.max() > 0:
-            probs = edge_strength / edge_strength.sum()
-            flat_idx = torch.multinomial(probs.view(-1), 1).item()
-            y = flat_idx // canvas_width
-            x = flat_idx % canvas_width
-        else:
-            # Fallback to color-based sampling
-            return sample_uv_from_color()
-        
-        # Jitter and normalize
-        u = (float(x) + random.random()) / float(canvas_width)
-        v = (float(y) + random.random()) / float(canvas_height)
-        return (u, v)
-
     shapes = []
     shape_groups = []
 
     # === Preload & freeze strokes from JSON  ===
     frozen_idx = set()
-    new_indices = []
-    whitespace_indices = []
     preloaded_count = 0  # Track how many strokes we load from JSON
-
-    # if args.init_json is not None:
-    #     with open(args.init_json, "r") as f:
-    #         data = json.load(f)
-
-    #     def ensure_rgba(c, force_opaque_alpha):
-    #         c = list(c)
-    #         if len(c) == 3:
-    #             c = c + [1.0 if force_opaque_alpha else random.random()]
-    #         if force_opaque_alpha:
-    #             c[3] = 1.0
-    #         return c
-
-    #     for _i, s in enumerate(data.get("strokes", [])):
-    #         pts = torch.tensor(s["points"], dtype=torch.float32, device=pydiffvg.get_device())
-    #         # pts = torch.tensor(s["points"], dtype=torch.float32, device=pydiffvg.get_device()
-
-    #         n = pts.shape[0]
-    #         if n >= 4:
-    #             segs = max((n - 1) // 3, 1)  # heuristic chunking for cubic
-    #             num_control_points = torch.zeros(segs, dtype=torch.int32, device=pydiffvg.get_device()) + 2
-    #         else:
-    #             segs = 1
-    #             num_control_points = torch.zeros(segs, dtype=torch.int32, device=pydiffvg.get_device()) + 0
-
-    #         stroke_w = torch.tensor(float(s.get("stroke_width", 1.0)),
-    #                                 dtype=torch.float32, device=pydiffvg.get_device())
-    #         stroke_col = torch.tensor(
-    #             ensure_rgba(s.get("color", [0,0,0,1]), args.ignore_alpha),
-    #             dtype=torch.float32, device=pydiffvg.get_device()
-    #         )
-
-    #         path = pydiffvg.Path(num_control_points=num_control_points,
-    #                             points=pts,
-    #                             stroke_width=stroke_w,
-    #                             is_closed=False)
-    #         shapes.append(path)
-
-    #         grp = pydiffvg.ShapeGroup(
-    #             shape_ids=torch.tensor([len(shapes) - 1], device=pydiffvg.get_device()),
-    #             fill_color=None,
-    #             stroke_color=stroke_col
-    #         )
-    #         shape_groups.append(grp)
-
-    #         # Mark this stroke as frozen
-    #         frozen_idx.add(len(shapes) - 1)
-    #         preloaded_count += 1  # Increment counter
-
-    #     print(f"Loaded {preloaded_count} frozen strokes from {args.init_json}")
 
     if args.init_json is not None:
         with open(args.init_json, "r") as f:
@@ -305,14 +204,6 @@ def main(args):
             points = []
             # p0 = (random.random(), random.random())
             p0 = sample_uv_from_color() if args.init_on_color else (random.random(), random.random())
-
-            #dont need right now 
-            # if args.use_black_bg:
-            #     while (target[0, :, int(p0[1] * canvas_height), int(p0[0] * canvas_width)] == 0.).all():
-            #         p0 = (random.random(), random.random())
-            # else:
-            #     while (target[0, :, int(p0[1] * canvas_height), int(p0[0] * canvas_width)] == 1.).all():
-            #         p0 = (random.random(), random.random())
             points.append(p0)
             for j in range(num_segments):
                 radius = args.radius
@@ -352,26 +243,6 @@ def main(args):
                  None,
                  *scene_args)
     pydiffvg.imwrite(img.cpu(), f'results/{dir_name}/init.png', gamma=gamma)
-
-    # points_vars = []
-    # stroke_width_vars = []
-    # color_vars = []
-    # for path in shapes:
-    #     path.points.requires_grad = True
-    #     points_vars.append(path.points)
-    # if not args.use_blob:
-    #     for path in shapes:
-    #         path.stroke_width.requires_grad = True
-    #         stroke_width_vars.append(path.stroke_width)
-    # if args.use_blob:
-    #     for group in shape_groups:
-    #         group.fill_color.requires_grad = True
-    #         color_vars.append(group.fill_color)
-    # else:
-    #     for group in shape_groups:
-    #         group.stroke_color.requires_grad = True
-    #         color_vars.append(group.stroke_color)
-
     points_vars, stroke_width_vars, color_vars = [], [], []
 
     for i, path in enumerate(shapes):
@@ -425,13 +296,6 @@ def main(args):
                      t,   # seed
                      None,
                      *scene_args)
-        # Compose img with white background
-        # if args.use_black_bg:
-        #     img = img[:, :, 3:4] * img[:, :, :3] + torch.zeros(img.shape[0], img.shape[1], 3, device = pydiffvg.get_device()) * (1 - img[:, :, 3:4])
-        # else:
-        #     img = img[:, :, 3:4] * img[:, :, :3] + torch.ones(img.shape[0], img.shape[1], 3, device = pydiffvg.get_device()) * (1 - img[:, :, 3:4])
-        # Compose img with chosen background
-        # Compose img with chosen background (inline hex parsing, no helper needed)
         alpha = img[:, :, 3:4]
         rgb   = img[:, :, :3]
 
@@ -453,27 +317,15 @@ def main(args):
                 bg = torch.ones (img.shape[0], img.shape[1], 3, device=pydiffvg.get_device(), dtype=img.dtype)
 
         img = alpha * rgb + (1 - alpha) * bg
-
-
-        
-        # === Whitespace helpers ===
-        # bg = torch.zeros_like(img) if args.use_black_bg else torch.ones_like(img)  # HxWx3
-        # # Per-pixel distance from background (L2 across channels), shape: HxW
-        # bg_dist = torch.norm(img - bg, dim=2)
-        # # Background-like pixels ~1, inked pixels ~0
-        # whitespace_field = torch.exp(-args.whitespace_k * bg_dist)
-        # whitespace_loss = whitespace_field.mean()
+   
+   
         # === Whitespace helpers (reuse the SAME bg you composed with) ===
         bg_dist = torch.norm(img - bg, dim=2)     # HxW
         whitespace_field = torch.exp(-args.whitespace_k * bg_dist)
         whitespace_loss = whitespace_field.mean()
 
-
-                
-        
         
         # Save the intermediate render.
-        # pydiffvg.imwrite(img.cpu(), f'results/{dir_name}/iter_{t}.png', gamma=gamma)
         pydiffvg.imwrite(img.cpu(), f'results/{dir_name}/latest.png', gamma=gamma)
         img = img[:, :, :3]
         # Convert img from HWC to NCHW
@@ -649,13 +501,6 @@ def main(args):
                 if opt_w: opt_w.step()
                 opt_c.step()
 
-                # # keep widths in bounds
-                # for pth in shapes:
-                #     pth.stroke_width.data.clamp_(1.0, max_width)
-
-                # keep widths in bounds
-                # for pth in shapes:
-                #     pth.stroke_width.data.clamp_(1.0, max_width)
                 # keep widths in bounds (but don't touch frozen underlayer)
                 for i, pth in enumerate(shapes):
                     if i in frozen_idx:
@@ -676,31 +521,6 @@ def main(args):
     img = render(canvas_width, canvas_height, 2, 2, 0, None, *scene_args)
     pydiffvg.imwrite(img.cpu(), f'results/{dir_name}/final.png', gamma=gamma)
 
-
-    # # === Final render (always do this) ===
-    # scene_args = pydiffvg.RenderFunction.serialize_scene(canvas_width, canvas_height, shapes, shape_groups)
-    # # img = render(canvas_width, canvas_height, 2, 2, 0, None, *scene_args)
-    # # pydiffvg.imwrite(img.cpu(), f'results/{dir_name}/final.png', gamma=gamma)
-
-
-
-
-    # # Render the final result.
-    # img = render(target.shape[1], # width
-    #              target.shape[0], # height
-    #              2,   # num_samples_x
-    #              2,   # num_samples_y
-    #              0,   # seed
-    #              None,
-    #              *scene_args)
-    # # Save the intermediate render.
-    # pydiffvg.imwrite(img.cpu(), f'results/{dir_name}/final.png', gamma=gamma)
-    # Convert the intermediate renderings to a video.
-    # from subprocess import call
-    # call(["ffmpeg", "-framerate", "24", "-i",
-    #     f"results/{dir_name}/iter_%d.png", "-vb", "20M",
-    #     f"results/{dir_name}/out.mp4"])
-
     # Convert strokes to json
     def bezier_curve(P0, P1, P2, n_points=5):
         """Quadratic Bezier curve."""
@@ -711,17 +531,6 @@ def main(args):
         """Cubic Bezier curve."""
         t = np.linspace(0, 1, n_points).reshape(-1, 1)
         return (1 - t) ** 3 * P0 + 3 * (1 - t) ** 2 * t * P1 + 3 * (1 - t) * t ** 2 * P2 + t ** 3 * P3
-    
-    def parse_hex_color(h: str):
-        h = h.lstrip('#')
-        if len(h) == 3:  # e.g. #f0a
-            h = ''.join(c*2 for c in h)
-        if len(h) != 6:
-            raise ValueError(f"Bad hex color: {h}")
-        r = int(h[0:2], 16) / 255.0
-        g = int(h[2:4], 16) / 255.0
-        b = int(h[4:6], 16) / 255.0
-        return r, g, b
 
 
     json_strokes = []
@@ -767,17 +576,14 @@ if __name__ == "__main__":
     parser.add_argument("--ignore_alpha", dest='ignore_alpha', action='store_true')
     parser.add_argument("--radius", type=float, default=0.05)
     parser.add_argument("--use_black_bg", dest='use_black_bg', action='store_true')
-    ## new 
     parser.add_argument("--lambda_whitespace", type=float, default=0.0,
                     help="Strength of whitespace penalty (0 disables)")
     parser.add_argument("--whitespace_k", type=float, default=12.0,
                     help="Sharpness for whitespace penalty (higher -> counts only near-exact background as whitespace)")
     parser.add_argument("--bg_color", type=str, default=None,
         help="Hex RGB like '#ff1493'. If set, overrides white/black background.")
-
     parser.add_argument("--fill_whitespace", action="store_true",
         help="After main training, add one short stroke per neon-colored hole and briefly refine")
-    
     parser.add_argument("--init_on_color", action="store_true",
     help="Initialize stroke start points only on non-black pixels of the target")
     parser.add_argument("--black_thresh", type=float, default=0.05,
@@ -786,11 +592,5 @@ if __name__ == "__main__":
         help="Path to a JSON of existing strokes to start from (frozen underlayer).")
     parser.add_argument("--extra_paths", type=int, default=None,
         help="How many NEW strokes to add on top of the frozen init_json strokes. Defaults to --num_paths if unset.")
-
-
-    parser.add_argument("--init_fg", action="store_true",
-        help="Use GrabCut (or brightness fallback) and constrain ALL new stroke points to the foreground.")
-
-
     args = parser.parse_args()
     main(args)
