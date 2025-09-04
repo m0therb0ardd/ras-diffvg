@@ -42,7 +42,7 @@ For original DiffVG documentation, see [upstream README](https://github.com/Bach
   
 | input | large brush | detail brush |
 |-------|-------------|--------------|
-| ![INPUT IMAGE](apps/imgs/rainbow_flower_closeup.png) | ![DIFFVG LARGE BRUSH OUTPUT](apps/results/20250828_164741-rainbow_flower_closeup_big_brush/final.png) | ![DIFFVG DETAIL BRUSH LAYER OUTPUT](apps/results/20250829_104739-rainbow_flower_closeup/final.png) |
+| ![INPUT IMAGE](apps/imgs/rainbow_flower_closeup.png) | ![DIFFVG LARGE BRUSH OUTPUT](apps/imgs/rainbow_flower_big_brush.png) | ![DIFFVG DETAIL BRUSH LAYER OUTPUT](apps/imgs/rainbow_flower_detailspng) |
 
 </p>
 
@@ -73,7 +73,7 @@ python painterly_rendering_opaque.py imgs/rainbow_flower_closeup.png \
   
 | input | large brush |
 |-------|-------------|
-| ![INPUT IMAGE](apps/imgs/pink_and_blue_lone_flower_blackbg.png) | ![DIFFVG LARGE BRUSH OUTPUT](apps/results/20250827_142622-pink_and_blue_lone_flower_blackbg_500strokes/final.png) 
+| ![INPUT IMAGE](apps/imgs/pink_and_blue_lone_flower_blackbg.png) | ![DIFFVG LARGE BRUSH OUTPUT](apps/imgs/blue_flower_final.png)
 </p>
 
 ### Pass 1: large brush strokes
