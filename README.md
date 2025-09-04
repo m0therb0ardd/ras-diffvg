@@ -42,7 +42,7 @@ For original DiffVG documentation, see [upstream README](https://github.com/Bach
   
 | input | large brush | detail brush |
 |-------|-------------|--------------|
-| ![INPUT IMAGE](apps/imgs/rainbow_flower_closeup.png) | ![DIFFVG LARGE BRUSH OUTPUT](apps/imgs/rainbow_flower_big_brush.png) | ![DIFFVG DETAIL BRUSH LAYER OUTPUT](apps/imgs/rainbow_flower_detailspng) |
+| ![INPUT IMAGE](apps/imgs/rainbow_flower_closeup.png) | ![DIFFVG LARGE BRUSH OUTPUT](apps/imgs/rainbow_flower_big_brush.png) | ![DIFFVG DETAIL BRUSH LAYER OUTPUT](apps/imgs/rainbow_flower_details.png) |
 
 </p>
 
