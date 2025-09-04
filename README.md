@@ -13,8 +13,7 @@ For original DiffVG documentation, see [upstream README](https://github.com/Bach
    Run `painterly_rendering_opaque.py` to optimize strokes and save `results/<run>/<name>_diffvg.json` (+ PNG/SVG previews).
 
 2) **post-process for robot**  
-   Convert `*_diffvg.json` → `<name>_kuka.json` (crop to canvas, normalize coords, assign brush 0/1, sort by brush→hue→value).  
-   _(Link to yr post-processing script/repo here.)_
+   Convert `*_diffvg.json` → `<name>_kuka.json` (crop to canvas, normalize coords, assign brush 0/1, sort by brush→hue→value) using [this post_processing script](https://github.com/michelllepan/ras-robot-painting)
 
 3) **execute**  
    Load `<name>_kuka.json` in the robot control to paint the diffvg interpretation of the painting.
