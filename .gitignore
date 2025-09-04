@@ -58,6 +58,6 @@ Makefile
 *.dylib
 *.exe
 
-# --- Keep the whole imgs folder ---
+# --- Keep the whole imgs folder (override earlier ignores) ---
 !apps/imgs/
 !apps/imgs/**
