@@ -57,3 +57,7 @@ Makefile
 *.dll
 *.dylib
 *.exe
+
+# --- Keep the whole imgs folder ---
+!apps/imgs/
+!apps/imgs/**
